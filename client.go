@@ -236,6 +236,7 @@ func (c *gobClientCodec) Close() error {
 // DialHTTP connects to an HTTP RPC server at the specified network address
 // listening on the default HTTP RPC path.
 func DialHTTP(network, address string) (*Client, error) {
+	// 如何请求服务器呢？
 	return DialHTTPPath(network, address, DefaultRPCPath)
 }
 
@@ -247,6 +248,10 @@ func DialHTTPPath(network, address, path string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 实际上是在一个tcp连接上，发送者一个个独立的包，包的发送和返回其实可以异步进行
+	// 不支持http 2.0
+	// client可能需要多个，
 	io.WriteString(conn, "CONNECT "+path+" HTTP/1.0\n\n")
 
 	// Require successful HTTP response

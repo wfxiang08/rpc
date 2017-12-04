@@ -154,8 +154,8 @@ var typeOfError = reflect.TypeOf((*error)(nil)).Elem()
 type methodType struct {
 	sync.Mutex // protects counters
 	method     reflect.Method
-	ArgType    reflect.Type
-	ReplyType  reflect.Type
+	ArgType    reflect.Type // 输入参数类型
+	ReplyType  reflect.Type // 返回参数类型
 	numCalls   uint
 }
 
@@ -172,7 +172,7 @@ type service struct {
 type Request struct {
 	ServiceMethod string   // format: "Service.Method"
 	Seq           uint64   // sequence number chosen by client
-	next          *Request // for free list in Server
+	next          *Request // for free list in Server 内存管理
 }
 
 // Response is a header written before every RPC return. It is used internally
@@ -292,6 +292,8 @@ func (server *Server) register(rcvr interface{}, name string, useName bool) erro
 func suitableMethods(typ reflect.Type, reportErr bool) map[string]*methodType {
 	methods := make(map[string]*methodType)
 	for m := 0; m < typ.NumMethod(); m++ {
+
+		// 获取Method
 		method := typ.Method(m)
 		mtype := method.Type
 		mname := method.Name
@@ -345,6 +347,7 @@ func suitableMethods(typ reflect.Type, reportErr bool) map[string]*methodType {
 			}
 			continue
 		}
+		// 构建MethodType
 		methods[mname] = &methodType{method: method, ArgType: argType, ReplyType: replyType}
 	}
 	return methods
@@ -355,16 +358,20 @@ func suitableMethods(typ reflect.Type, reportErr bool) map[string]*methodType {
 // contains an error when it is used.
 var invalidRequest = struct{}{}
 
+// 设置返回数据?
 func (server *Server) sendResponse(sending *sync.Mutex, req *Request, reply interface{}, codec ServerCodec, errmsg string) {
 	resp := server.getResponse()
+
 	// Encode the response header
 	resp.ServiceMethod = req.ServiceMethod
+
 	if errmsg != "" {
 		resp.Error = errmsg
 		reply = invalidRequest
 	}
 	resp.Seq = req.Seq
 	sending.Lock()
+	// 将reply编码到Response中
 	err := codec.WriteResponse(resp, reply)
 	if debugLog && err != nil {
 		log.Println("rpc: writing response:", err)
@@ -373,6 +380,7 @@ func (server *Server) sendResponse(sending *sync.Mutex, req *Request, reply inte
 	server.freeResponse(resp)
 }
 
+// 当前调用次数
 func (m *methodType) NumCalls() (n uint) {
 	m.Lock()
 	n = m.numCalls
@@ -420,6 +428,7 @@ func (c *gobServerCodec) ReadRequestBody(body interface{}) error {
 func (c *gobServerCodec) WriteResponse(r *Response, body interface{}) (err error) {
 	// 编码Header
 	if err = c.enc.Encode(r); err != nil {
+		// 写头的时候，出错，就Flush, 在出错就关闭
 		if c.encBuf.Flush() == nil {
 			// Gob couldn't encode the header. Should not happen, so if it does,
 			// shut down the connection to signal that the connection is broken.
@@ -461,18 +470,21 @@ func (c *gobServerCodec) Close() error {
 func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 	buf := bufio.NewWriter(conn)
 
-	// 如何处理conn?
+	// 将conn封装成为: enc/dec? 实现gob协议
 	srv := &gobServerCodec{
 		rwc:    conn,
 		dec:    gob.NewDecoder(conn),
 		enc:    gob.NewEncoder(buf),
 		encBuf: buf,
 	}
+
+	// 普通的conn, 转成成为Codec
 	server.ServeCodec(srv)
 }
 
 // ServeCodec is like ServeConn but uses the specified codec to
 // decode requests and encode responses.
+// 基于Codec提供对外服务
 func (server *Server) ServeCodec(codec ServerCodec) {
 	sending := new(sync.Mutex)
 
@@ -497,6 +509,7 @@ func (server *Server) ServeCodec(codec ServerCodec) {
 		}
 
 		// 异步调用
+		// 不用的调用的返回顺序可以不一致
 		go service.call(server, sending, mtype, req, argv, replyv, codec)
 	}
 	codec.Close()
@@ -506,6 +519,8 @@ func (server *Server) ServeCodec(codec ServerCodec) {
 // It does not close the codec upon completion.
 func (server *Server) ServeRequest(codec ServerCodec) error {
 	sending := new(sync.Mutex)
+
+	// 解码Request
 	service, mtype, req, argv, replyv, keepReading, err := server.readRequest(codec)
 	if err != nil {
 		if !keepReading {
@@ -522,6 +537,7 @@ func (server *Server) ServeRequest(codec ServerCodec) error {
 	return nil
 }
 
+// Request & Response 池管理
 func (server *Server) getRequest() *Request {
 	server.reqLock.Lock()
 	req := server.freeReq
@@ -535,6 +551,7 @@ func (server *Server) getRequest() *Request {
 	return req
 }
 
+// Request & Response 池管理
 func (server *Server) freeRequest(req *Request) {
 	server.reqLock.Lock()
 	req.next = server.freeReq
@@ -542,6 +559,7 @@ func (server *Server) freeRequest(req *Request) {
 	server.reqLock.Unlock()
 }
 
+// Request & Response 池管理
 func (server *Server) getResponse() *Response {
 	server.respLock.Lock()
 	resp := server.freeResp
@@ -555,14 +573,17 @@ func (server *Server) getResponse() *Response {
 	return resp
 }
 
+// Request & Response 池管理
 func (server *Server) freeResponse(resp *Response) {
 	server.respLock.Lock()
-	resp.next = server.freeResp
+	resp.next = server.freeResp // 内存管理
 	server.freeResp = resp
 	server.respLock.Unlock()
 }
 
-func (server *Server) readRequest(codec ServerCodec) (service *service, mtype *methodType, req *Request, argv, replyv reflect.Value, keepReading bool, err error) {
+func (server *Server) readRequest(codec ServerCodec) (service *service, mtype *methodType,
+	req *Request, argv, replyv reflect.Value, keepReading bool, err error) {
+
 	service, mtype, req, keepReading, err = server.readRequestHeader(codec)
 	if err != nil {
 		if !keepReading {
@@ -575,6 +596,7 @@ func (server *Server) readRequest(codec ServerCodec) (service *service, mtype *m
 
 	// Decode the argument value.
 	argIsValue := false // if true, need to indirect before calling.
+	// 如何解码参数呢?
 	if mtype.ArgType.Kind() == reflect.Ptr {
 		argv = reflect.New(mtype.ArgType.Elem())
 	} else {
@@ -600,7 +622,9 @@ func (server *Server) readRequest(codec ServerCodec) (service *service, mtype *m
 	return
 }
 
-func (server *Server) readRequestHeader(codec ServerCodec) (svc *service, mtype *methodType, req *Request, keepReading bool, err error) {
+func (server *Server) readRequestHeader(codec ServerCodec) (svc *service, mtype *methodType,
+	req *Request, keepReading bool, err error) {
+
 	// Grab the request header.
 	req = server.getRequest()
 	err = codec.ReadRequestHeader(req)
@@ -726,7 +750,8 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
 
-	//
+	// 如何处理http请求呢?
+	// Http协议如何处理呢? 复用同一个http请求，不断呢地发送包，返回包
 	server.ServeConn(conn)
 }
 
