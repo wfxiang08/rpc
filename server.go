@@ -242,10 +242,14 @@ func (server *Server) register(rcvr interface{}, name string, useName bool) erro
 	s := new(service)
 	s.typ = reflect.TypeOf(rcvr)
 	s.rcvr = reflect.ValueOf(rcvr)
+
+	// 获取TypeName
 	sname := reflect.Indirect(s.rcvr).Type().Name()
 	if useName {
 		sname = name
 	}
+
+	// 没有名字就报错
 	if sname == "" {
 		s := "rpc.Register: no service name for type " + s.typ.String()
 		log.Print(s)
@@ -275,12 +279,14 @@ func (server *Server) register(rcvr interface{}, name string, useName bool) erro
 		return errors.New(str)
 	}
 
+	// 注册对象
 	if _, dup := server.serviceMap.LoadOrStore(sname, s); dup {
 		return errors.New("rpc: service already defined: " + sname)
 	}
 	return nil
 }
 
+// 遍历Method
 // suitableMethods returns suitable Rpc methods of typ, it will report
 // error using log if reportErr is true.
 func suitableMethods(typ reflect.Type, reportErr bool) map[string]*methodType {
@@ -293,6 +299,8 @@ func suitableMethods(typ reflect.Type, reportErr bool) map[string]*methodType {
 		if method.PkgPath != "" {
 			continue
 		}
+
+		// Method的签名
 		// Method needs three ins: receiver, *args, *reply.
 		if mtype.NumIn() != 3 {
 			if reportErr {
@@ -376,6 +384,8 @@ func (s *service) call(server *Server, sending *sync.Mutex, mtype *methodType, r
 	mtype.Lock()
 	mtype.numCalls++
 	mtype.Unlock()
+
+	// 如何回调呢?
 	function := mtype.method.Func
 	// Invoke the method, providing a new value for the reply.
 	returnValues := function.Call([]reflect.Value{s.rcvr, argv, replyv})
@@ -398,14 +408,17 @@ type gobServerCodec struct {
 }
 
 func (c *gobServerCodec) ReadRequestHeader(r *Request) error {
+	// 解码: Request
 	return c.dec.Decode(r)
 }
 
 func (c *gobServerCodec) ReadRequestBody(body interface{}) error {
+	// 解码: RequestBody
 	return c.dec.Decode(body)
 }
 
 func (c *gobServerCodec) WriteResponse(r *Response, body interface{}) (err error) {
+	// 编码Header
 	if err = c.enc.Encode(r); err != nil {
 		if c.encBuf.Flush() == nil {
 			// Gob couldn't encode the header. Should not happen, so if it does,
@@ -415,6 +428,8 @@ func (c *gobServerCodec) WriteResponse(r *Response, body interface{}) (err error
 		}
 		return
 	}
+
+	// 编码body
 	if err = c.enc.Encode(body); err != nil {
 		if c.encBuf.Flush() == nil {
 			// Was a gob problem encoding the body but the header has been written.
@@ -424,6 +439,8 @@ func (c *gobServerCodec) WriteResponse(r *Response, body interface{}) (err error
 		}
 		return
 	}
+
+	// Flush
 	return c.encBuf.Flush()
 }
 
@@ -443,6 +460,8 @@ func (c *gobServerCodec) Close() error {
 // connection. To use an alternate codec, use ServeCodec.
 func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 	buf := bufio.NewWriter(conn)
+
+	// 如何处理conn?
 	srv := &gobServerCodec{
 		rwc:    conn,
 		dec:    gob.NewDecoder(conn),
@@ -456,8 +475,12 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 // decode requests and encode responses.
 func (server *Server) ServeCodec(codec ServerCodec) {
 	sending := new(sync.Mutex)
+
 	for {
+		// 解码Request
 		service, mtype, req, argv, replyv, keepReading, err := server.readRequest(codec)
+
+		// 处理解码错误
 		if err != nil {
 			if debugLog && err != io.EOF {
 				log.Println("rpc:", err)
@@ -472,6 +495,8 @@ func (server *Server) ServeCodec(codec ServerCodec) {
 			}
 			continue
 		}
+
+		// 异步调用
 		go service.call(server, sending, mtype, req, argv, replyv, codec)
 	}
 	codec.Close()
@@ -592,6 +617,7 @@ func (server *Server) readRequestHeader(codec ServerCodec) (svc *service, mtype 
 	// we can still recover and move on to the next request.
 	keepReading = true
 
+	// 解码: ServiceMethod --> ServiceName MethodName
 	dot := strings.LastIndex(req.ServiceMethod, ".")
 	if dot < 0 {
 		err = errors.New("rpc: service/method request ill-formed: " + req.ServiceMethod)
@@ -601,6 +627,7 @@ func (server *Server) readRequestHeader(codec ServerCodec) (svc *service, mtype 
 	methodName := req.ServiceMethod[dot+1:]
 
 	// Look up the request.
+	// Service
 	svci, ok := server.serviceMap.Load(serviceName)
 	if !ok {
 		err = errors.New("rpc: can't find service " + req.ServiceMethod)
@@ -691,12 +718,15 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		io.WriteString(w, "405 must CONNECT\n")
 		return
 	}
+
 	conn, _, err := w.(http.Hijacker).Hijack()
 	if err != nil {
 		log.Print("rpc hijacking ", req.RemoteAddr, ": ", err.Error())
 		return
 	}
 	io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
+
+	//
 	server.ServeConn(conn)
 }
 
@@ -704,6 +734,7 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // and a debugging handler on debugPath.
 // It is still necessary to invoke http.Serve(), typically in a go statement.
 func (server *Server) HandleHTTP(rpcPath, debugPath string) {
+	// 如何处理映射呢?
 	http.Handle(rpcPath, server)
 	http.Handle(debugPath, debugHTTP{server})
 }

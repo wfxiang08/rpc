@@ -88,7 +88,9 @@ func (client *Client) send(call *Call) {
 	// Encode and send the request.
 	client.request.Seq = seq
 	client.request.ServiceMethod = call.ServiceMethod
+	// 发送请求
 	err := client.codec.WriteRequest(&client.request, call.Args)
+	// 异步通知
 	if err != nil {
 		client.mutex.Lock()
 		call = client.pending[seq]
@@ -314,6 +316,8 @@ func (client *Client) Go(serviceMethod string, args interface{}, reply interface
 
 // Call invokes the named function, waits for it to complete, and returns its error status.
 func (client *Client) Call(serviceMethod string, args interface{}, reply interface{}) error {
+	// 异步调用
+	// 同步等待
 	call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
 	return call.Error
 }

@@ -61,14 +61,26 @@ func TestGobError(t *testing.T) {
 			t.Fatal("expected `reading body EOF', got", err)
 		}
 	}()
+	// 注册服务
 	Register(new(S))
 
+	// 启动服务
 	listen, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
 	}
+
+	// 1. CallInterface()
+	// Name, Map
+	// Method -->
+
+	// 2. 本地第一个localhost的server
+	// 3.
+
+	// 异步测试
 	go Accept(listen)
 
+	// 通过Client访问方法
 	client, err := Dial("tcp", listen.Addr().String())
 	if err != nil {
 		panic(err)
